@@ -128,12 +128,14 @@ with tab3:
         regions = sorted(set(df_annual["region"]).intersection(set(df_prod["region"])))
         selected_regions = st.multiselect("Sélectionnez les régions à comparer", regions, default=regions[:3])
 
+        # ⚡ Consommation
         st.subheader("⚡ Consommation électrique annuelle (GWh)")
         df_conso = df_annual[df_annual["region"].isin(selected_regions)].copy()
         df_conso["année"] = pd.to_numeric(df_conso["année"], errors="coerce").astype("Int64")
         df_conso_pivot = df_conso.pivot(index="année", columns="region", values="conso_elec_GWh")
         st.line_chart(df_conso_pivot)
 
+        # 🔋 Production
         st.subheader("🔋 Production annuelle totale (GWh)")
         df_prod["year"] = pd.to_numeric(df_prod["mois"].dt.year, errors="coerce").astype("Int64")
         df_prod_grouped = df_prod[df_prod["region"].isin(selected_regions)].groupby(["year", "region"])[
@@ -141,16 +143,17 @@ with tab3:
         df_prod_pivot = df_prod_grouped.pivot(index="year", columns="region", values="production_GWh")
         st.line_chart(df_prod_pivot)
 
+        # ⚖️ Écart Production - Consommation
         st.subheader("⚖️ Écart Production - Consommation")
 
-        # Sélecteur pour une seule région
+        # Choix d’une seule région pour cet affichage
         selected_region_for_gap = st.selectbox(
             "Choisissez une région pour afficher l'écart production-consommation",
             sorted(df_conso["region"].unique()),
             key="region_gap"
         )
 
-        # Calcul de l’écart uniquement pour cette région
+        # Données pour la région sélectionnée
         df_conso_gap = df_conso[df_conso["region"] == selected_region_for_gap]
         df_prod_gap = df_prod_grouped[df_prod_grouped["region"] == selected_region_for_gap].rename(
             columns={"year": "année", "production_GWh": "prod_GWh"})
@@ -164,23 +167,50 @@ with tab3:
         df_gap["écart_GWh"] = df_gap["prod_GWh"] - df_gap["conso_elec_GWh"]
         df_gap["année"] = df_gap["année"].astype(str)
 
-        # Graphique simple, une seule barre par année
-        chart_grouped = alt.Chart(df_gap).mark_bar().encode(
+        # Moyenne nationale de l'écart
+        df_national_gap = pd.merge(
+            df_conso.groupby(["année", "region"])["conso_elec_GWh"].sum().reset_index(),
+            df_prod_grouped.rename(columns={"year": "année", "production_GWh": "prod_GWh"}),
+            on=["année", "region"],
+            how="inner"
+        )
+        df_national_gap["écart_GWh"] = df_national_gap["prod_GWh"] - df_national_gap["conso_elec_GWh"]
+        df_mean = df_national_gap.groupby("année")["écart_GWh"].mean().reset_index()
+        df_mean["année"] = df_mean["année"].astype(str)
+
+        # Altair : barres colorées conditionnelles + ligne de moyenne
+        import altair as alt
+        bar_chart = alt.Chart(df_gap).mark_bar().encode(
             x=alt.X('année:N', title="Année"),
             y=alt.Y('écart_GWh:Q', title="Écart Production - Consommation (GWh)"),
-            color=alt.value("#007BFF"),
+            color=alt.condition(
+                alt.datum.écart_GWh > 0,
+                alt.value("#2E86DE"),  # bleu
+                alt.value("#E74C3C")   # rouge
+            ),
             tooltip=["année", "écart_GWh"]
-        ).properties(
-            width=600,
-            height=400,
-            title=f"⚖️ Écart Production - Consommation – {selected_region_for_gap}"
         )
 
-        st.altair_chart(chart_grouped, use_container_width=True)
+        line_chart = alt.Chart(df_mean).mark_line(strokeDash=[5, 5], color='black').encode(
+            x='année:N',
+            y='écart_GWh:Q',
+            tooltip=["année", alt.Tooltip("écart_GWh", title="Moyenne nationale")]
+        )
+
+        final_chart = (bar_chart + line_chart).properties(
+            width=700,
+            height=400,
+            title=f"⚖️ Écart Production - Consommation – {selected_region_for_gap} (avec moyenne nationale)"
+        )
+
+        st.altair_chart(final_chart, use_container_width=True)
 
         st.markdown("""
         - Un **écart positif** signifie que la région **produit plus qu'elle ne consomme**, ce qui en fait un **territoire exportateur net**.
+
         - Un **écart négatif** indique une **dépendance à l'importation d'énergie**, souvent liée à une faible capacité de production locale.
+
+        - La **ligne pointillée** représente la **moyenne nationale** de l’écart, ce qui permet de situer chaque région par rapport à l’ensemble du pays.
         """)
     else:
         st.warning("Les données production ou consommation ne sont pas disponibles.")
@@ -217,8 +247,6 @@ with tab4:
     else:
         st.warning("Aucune donnée disponible pour les bornes IRVE.")
 
-with tab5:
-    st.header("Indicateurs simples sur les bornes IRVE")
     st.write("Quelques indicateurs clés sur les infrastructures de recharge.")
 
     if ev_data is not None and not ev_data.empty:
@@ -232,3 +260,68 @@ with tab5:
         st.dataframe(top_regions)
     else:
         st.warning("Données non disponibles pour les statistiques.")
+
+
+with tab5:
+    st.header("🔌 Corrélation : Bornes IRVE et Consommation Électrique")
+
+    df_annual = clean_data.get("annual_consumption")
+    ev_data = clean_data.get("ev_charging")
+
+    if df_annual is not None and ev_data is not None and not df_annual.empty and not ev_data.empty:
+        # Conversion en datetime et extraction de l'année
+        ev_data["date_maj"] = pd.to_datetime(ev_data["date_maj"], errors="coerce")
+        ev_data["annee_installation"] = ev_data["date_maj"].dt.year
+        ev_data = ev_data.dropna(subset=["annee_installation", "region"])
+
+        # Agrégation du nombre de bornes par région et année
+        df_bornes = ev_data.groupby(["region", "annee_installation"]).size().reset_index(name="nb_bornes")
+
+        # Agrégation consommation annuelle par région
+        df_conso = df_annual[["region", "année", "conso_elec_GWh"]].copy()
+        df_conso["année"] = pd.to_numeric(df_conso["année"], errors="coerce")
+
+        # Fusion des deux jeux de données
+        df_corr = pd.merge(
+            df_bornes.rename(columns={"annee_installation": "année"}),
+            df_conso,
+            on=["region", "année"],
+            how="inner"
+        )
+
+        st.subheader("📈 Évolution des bornes IRVE vs consommation électrique")
+        selected_region = st.selectbox("Choisissez une région", sorted(df_corr["region"].unique()), key="tab6_region")
+        df_region = df_corr[df_corr["region"] == selected_region].sort_values("année")
+
+        chart = alt.Chart(df_region).transform_fold(
+            ["nb_bornes", "conso_elec_GWh"],
+            as_=["Indicateur", "Valeur"]
+        ).mark_line(point=True).encode(
+            x=alt.X("année:O", title="Année"),
+            y=alt.Y("Valeur:Q", title="Valeur normalisée"),
+            color="Indicateur:N",
+            tooltip=["année", "nb_bornes", "conso_elec_GWh"]
+        ).properties(
+            title=f"Évolution à {selected_region}",
+            width=700,
+            height=400
+        ).interactive()
+
+        st.altair_chart(chart, use_container_width=True)
+
+        # Corrélation linéaire
+        corr_value = df_region["nb_bornes"].corr(df_region["conso_elec_GWh"])
+        st.markdown(f"""
+        ### 📊 Coefficient de corrélation
+        Pour **{selected_region}**, le coefficient de corrélation entre le nombre de bornes installées et la consommation électrique est **{corr_value:.2f}**.
+        """)
+
+        with st.expander("Interprétation possible"):
+            st.markdown("""
+            - Un coefficient proche de **1** indique une **corrélation forte positive** : la consommation croît avec le nombre de bornes.
+            - Un coefficient proche de **0** : **pas de corrélation significative**.
+            - Un coefficient proche de **-1** : **corrélation inverse**.
+            > Cette analyse ne prouve pas une causalité mais peut orienter des politiques d’infrastructure.
+            """)
+    else:
+        st.warning("Les données nécessaires ne sont pas disponibles.")
