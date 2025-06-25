@@ -5,7 +5,8 @@ def clean_monthly_production(df):
     if df.empty:
         return df
 
-    df["mois"] = pd.to_datetime(df["mois"])
+    df["mois"] = pd.to_datetime(df["mois"], errors="coerce")
+
     df_long = df.melt(
         id_vars=["mois", "region"],
         value_vars=[
@@ -16,24 +17,32 @@ def clean_monthly_production(df):
         var_name="filiere",
         value_name="production_GWh"
     )
+
     df_long["filiere"] = df_long["filiere"].str.replace("production_", "", regex=False)
-    return df_long.dropna(subset=["production_GWh"])
+    df_long = df_long.dropna(subset=["production_GWh", "mois"])
+    return df_long
 
 
 def clean_energy_facilities(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=["region", "commune", "filiere", "puissance_MW"])
+        return pd.DataFrame(columns=["region", "commune", "filiere", "puissance_MW", "date_mise_en_service"])
 
-    return df.rename(columns={
-        "puismaxinstallee": "puissance_MW"
-    })[["region", "commune", "filiere", "puissance_MW"]]
+    df = df.rename(columns={
+        "puismaxinstallee": "puissance_MW",
+        "date_mise_en_service": "date_mise_en_service"
+    })
+
+    if "date_mise_en_service" in df.columns:
+        df["date_mise_en_service"] = pd.to_datetime(df["date_mise_en_service"], errors="coerce")
+
+    return df[["region", "commune", "filiere", "puissance_MW", "date_mise_en_service"]]
 
 
 def clean_ev_charging(df):
     if df.empty:
         return pd.DataFrame(columns=[
             "amenageur", "region", "departement", "commune",
-            "puissance_kW", "lat", "lon"
+            "puissance_kW", "lat", "lon", "date_maj"
         ])
 
     def extract_lat(x):
@@ -48,13 +57,18 @@ def clean_ev_charging(df):
     df_clean = df.rename(columns={
         "n_amenageur": "amenageur",
         "puiss_max": "puissance_kW",
-        "code_insee_commune": "commune"
+        "code_insee_commune": "commune",
+        "date_maj": "date_maj"
     })
+
+    if "date_maj" in df_clean.columns:
+        df_clean["date_maj"] = pd.to_datetime(df_clean["date_maj"], errors="coerce")
 
     return df_clean[[
         "amenageur", "region", "departement", "commune",
-        "puissance_kW", "lat", "lon"
+        "puissance_kW", "lat", "lon", "date_maj"
     ]].dropna(subset=["lat", "lon"])
+
 
 def clean_annual_consumption(df):
     if df.empty:
@@ -70,6 +84,10 @@ def clean_annual_consumption(df):
 
     df["année"] = pd.to_numeric(df["année"], errors="coerce")
     df = df.dropna(subset=["année", "region", "conso_elec_GWh"])
+
+    # Convertir les années en format datetime (au 1er janvier de l'année)
+    df["année"] = pd.to_datetime(df["année"].astype(int), format="%Y")
+
     return df[["année", "region", "conso_elec_GWh", "conso_gaz_GWh", "conso_totale_GWh"]]
 
 
@@ -80,4 +98,3 @@ def clean_and_merge(data: dict):
         "ev_charging": clean_ev_charging(data.get("ev_charging")),
         "annual_consumption": clean_annual_consumption(data.get("annual_consumption")),
     }
-

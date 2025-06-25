@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import streamlit as st
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -48,22 +49,25 @@ def fetch_api_data(endpoint, params=None, limit=100, max_records=10000):
 
     return pd.DataFrame.from_records(all_records)
 
+# ----------------------------
+# Fonctions de chargement
+# ----------------------------
+
+@st.cache_data
 def load_annual_energy_consumption():
     return fetch_api_data("consommation-annuelle-brute-regionale")
 
-
-
+@st.cache_data
 def load_monthly_production_by_filiere():
     return fetch_api_data("production-regionale-mensuelle-filiere")
 
-
+@st.cache_data
 def load_energy_facilities():
     return fetch_api_data("registre-national-installation-production-stockage-electricite-agrege")
 
-
+@st.cache_data
 def load_ev_charging_stations():
     return fetch_api_data("bornes-irve")
-
 
 def load_all():
     return {
@@ -72,4 +76,3 @@ def load_all():
         "ev_charging": load_ev_charging_stations(),
         "annual_consumption": load_annual_energy_consumption()
     }
-

@@ -1,14 +1,13 @@
 # scripts/mapping.py
 
 import folium
-import pandas as pd
 from folium.plugins import MarkerCluster
 
 def create_interactive_map(indicators, output_path="outputs/map.html"):
     print("🗺️ Génération de la carte interactive...")
 
     # Centre de la carte sur la France
-    m = folium.Map(location=[46.6, 2.5], zoom_start=6, tiles="CartoDB positron")
+    m = folium.Map(location=[46.6, 2.5], zoom_start=4, tiles="CartoDB positron")
 
     # 1. Couche : taux de couverture énergétique par région
     taux_df = indicators.get("taux_couverture")
