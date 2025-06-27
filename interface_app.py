@@ -5,6 +5,10 @@ from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from scripts import load_data, preprocess
 import plotly.express as px
+import altair as alt
+import requests
+
+
 
 
 st.set_page_config(page_title="Analyse IRVE", layout="wide")
@@ -80,15 +84,18 @@ with tab1:
         st.warning("Les données ne sont pas disponibles.")
 
 with tab2:
-    st.header("⚡ Consommation annuelle par région (GWh)")
+    st.header("Consommation annuelle par région (GWh)")
 
     df_annual = clean_data.get("annual_consumption")
     if df_annual is not None and not df_annual.empty:
         regions = sorted(df_annual["region"].unique())
 
         selected_region = st.selectbox("Choisissez une région", regions, key="region_select_tab2")
-        region_data = df_annual[df_annual["region"] == selected_region].sort_values("année").copy()
-        region_data["année"] = pd.to_numeric(region_data["année"], errors="coerce").astype(int).astype(str)
+        region_data = df_annual[df_annual["region"] == selected_region].copy()
+
+        region_data["année"] = pd.to_datetime(region_data["année"], unit="ns", errors="coerce").dt.year
+        region_data = region_data.dropna(subset=["année"]).sort_values("année")
+        region_data["année"] = region_data["année"].astype(int).astype(str)
 
         st.subheader(f"Consommation électrique annuelle – {selected_region}")
         st.line_chart(region_data.set_index("année")["conso_elec_GWh"])
@@ -96,7 +103,7 @@ with tab2:
         st.subheader("Répartition annuelle électricité vs gaz")
         st.bar_chart(region_data.set_index("année")[["conso_elec_GWh", "conso_gaz_GWh"]])
 
-        st.subheader("⚖️ Répartition % Électricité vs Gaz")
+        st.subheader("Répartition % Électricité vs Gaz")
 
         region_pct = region_data.dropna(subset=["conso_elec_GWh", "conso_gaz_GWh"]).copy()
         region_pct["total"] = region_pct["conso_elec_GWh"] + region_pct["conso_gaz_GWh"]
@@ -122,18 +129,12 @@ with tab2:
         fig.update_layout(legend_title_text="Source d'énergie", xaxis_type='category')
         st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("Interprétation des pourcentages"):
-            st.markdown("""
-            Ce graphique montre la **répartition relative entre l'électricité et le gaz** dans la consommation annuelle totale de la région sélectionnée :
-
-            - Une **hausse de la part d’électricité** peut refléter une **transition énergétique** vers des sources bas carbone.
-            - Une **diminution du gaz** peut être liée à des changements industriels, politiques ou économiques.
-            """)
-
         st.subheader("Données brutes")
         st.dataframe(region_data)
     else:
         st.warning("Données annuelles indisponibles.")
+
+
 with tab3:
     st.header("Comparaison entre régions – Production & Consommation")
 
@@ -145,14 +146,16 @@ with tab3:
         regions = sorted(set(df_annual["region"]).intersection(set(df_prod["region"])))
         selected_regions = st.multiselect("Sélectionnez les régions à comparer", regions, default=regions[:3])
 
-        st.subheader("⚡ Consommation électrique annuelle (GWh)")
+        # Conversion propre de l'année depuis timestamp
+        df_annual["année"] = pd.to_datetime(df_annual["année"], unit="ns", errors="coerce").dt.year.astype(str)
+
+        st.subheader("Consommation électrique annuelle (GWh)")
         df_conso = df_annual[df_annual["region"].isin(selected_regions)].copy()
-        df_conso["année"] = pd.to_numeric(df_conso["année"], errors="coerce").astype(int).astype(str)
         df_conso_pivot = df_conso.pivot(index="année", columns="region", values="conso_elec_GWh")
         st.line_chart(df_conso_pivot)
 
-        st.subheader("🔋 Production annuelle totale (GWh)")
-        df_prod["year"] = pd.to_numeric(df_prod["mois"].dt.year, errors="coerce").astype(int).astype(str)
+        st.subheader("Production annuelle totale (GWh)")
+        df_prod["year"] = df_prod["mois"].dt.year.astype(str)
         df_prod_grouped = df_prod[df_prod["region"].isin(selected_regions)].groupby(["year", "region"])[
             "production_GWh"].sum().reset_index()
         df_prod_pivot = df_prod_grouped.pivot(index="year", columns="region", values="production_GWh")
@@ -168,7 +171,8 @@ with tab3:
 
         df_conso_gap = df_conso[df_conso["region"] == selected_region_for_gap]
         df_prod_gap = df_prod_grouped[df_prod_grouped["region"] == selected_region_for_gap].rename(
-            columns={"year": "année", "production_GWh": "prod_GWh"})
+            columns={"year": "année", "production_GWh": "prod_GWh"}
+        )
 
         df_gap = pd.merge(
             df_conso_gap.groupby(["année", "region"])["conso_elec_GWh"].sum().reset_index(),
@@ -187,7 +191,6 @@ with tab3:
         df_national_gap["écart_GWh"] = df_national_gap["prod_GWh"] - df_national_gap["conso_elec_GWh"]
         df_mean = df_national_gap.groupby("année")["écart_GWh"].mean().reset_index()
 
-        import altair as alt
         bar_chart = alt.Chart(df_gap).mark_bar().encode(
             x=alt.X('année:N', title="Année"),
             y=alt.Y('écart_GWh:Q', title="Écart Production - Consommation (GWh)"),
@@ -208,7 +211,7 @@ with tab3:
         final_chart = (bar_chart + line_chart).properties(
             width=700,
             height=400,
-            title=f"⚖️ Écart Production - Consommation – {selected_region_for_gap} (avec moyenne nationale)"
+            title=f"Écart Production - Consommation – {selected_region_for_gap} (avec moyenne nationale)"
         )
 
         st.altair_chart(final_chart, use_container_width=True)
@@ -220,6 +223,61 @@ with tab3:
         """)
     else:
         st.warning("Les données production ou consommation ne sont pas disponibles.")
+
+    st.subheader("Visualisation cartographique")
+
+    geojson_url = "https://france-geojson.gregoiredavid.fr/repo/regions.geojson"
+    geojson_data = requests.get(geojson_url).json()
+
+    # Préparation des données
+    df_conso_mean = df_annual.groupby("region")["conso_elec_GWh"].mean().reset_index()
+    df_prod["year"] = df_prod["mois"].dt.year
+    df_prod_annual = df_prod.groupby(["region", "year"])["production_GWh"].sum().reset_index()
+    df_prod_mean = df_prod_annual.groupby("region")["production_GWh"].mean().reset_index()
+
+    # Merge pour liaison nom -> valeur
+    conso_dict = dict(zip(df_conso_mean["region"], df_conso_mean["conso_elec_GWh"]))
+    prod_dict = dict(zip(df_prod_mean["region"], df_prod_mean["production_GWh"]))
+
+
+    # Création des cartes Folium
+    def create_choropleth(data_dict, legend_name, color_scale):
+        fmap = folium.Map(location=[46.5, 2.5], zoom_start=5, tiles="cartodb positron")
+        folium.Choropleth(
+            geo_data=geojson_data,
+            name="choropleth",
+            data=data_dict,
+            columns=["region", "value"],
+            key_on="feature.properties.nom",
+            fill_color=color_scale,
+            fill_opacity=0.7,
+            line_opacity=0.2,
+            legend_name=legend_name,
+            highlight=True
+        ).add_to(fmap)
+
+        folium.GeoJson(
+            geojson_data,
+            name="labels",
+            style_function=lambda x: {"color": "transparent", "fillOpacity": 0},
+            tooltip=folium.GeoJsonTooltip(fields=["nom"], aliases=["Région :"])
+        ).add_to(fmap)
+
+        return fmap
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### Consommation moyenne (GWh)")
+        conso_data = pd.DataFrame({"region": list(conso_dict.keys()), "value": list(conso_dict.values())})
+        map_conso = create_choropleth(conso_dict, "Consommation (GWh)", "Reds")
+        st_folium(map_conso, width=500, height=550)
+
+    with col2:
+        st.markdown("### Production moyenne (GWh)")
+        prod_data = pd.DataFrame({"region": list(prod_dict.keys()), "value": list(prod_dict.values())})
+        map_prod = create_choropleth(prod_dict, "Production (GWh)", "Reds")
+        st_folium(map_prod, width=500, height=550)
 
 with tab4:
     st.header("Carte des bornes de recharge pour véhicules électriques")
@@ -265,7 +323,7 @@ with tab4:
     else:
         st.warning("Aucune donnée disponible pour les bornes IRVE.")
 
-    st.header("🔌 Bornes IRVE & Corrélation énergétique")
+    st.header("Bornes IRVE & Corrélation énergétique")
 
     df_annual = clean_data.get("annual_consumption")
     ev_data = clean_data.get("ev_charging")

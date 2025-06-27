@@ -1,6 +1,5 @@
 import pandas as pd
 
-
 def clean_monthly_production(df):
     if df.empty:
         return df
@@ -23,19 +22,22 @@ def clean_monthly_production(df):
     return df_long
 
 
-def clean_energy_facilities(df: pd.DataFrame) -> pd.DataFrame:
+def clean_energy_facilities(df):
     if df is None or df.empty:
-        return pd.DataFrame(columns=["region", "commune", "filiere", "puissance_MW", "date_mise_en_service"])
+        return pd.DataFrame()
 
-    df = df.rename(columns={
-        "puismaxinstallee": "puissance_MW",
-        "date_mise_en_service": "date_mise_en_service"
-    })
+    # Afficher les colonnes dispo pour debug
+    print("Colonnes disponibles dans facilities :", df.columns.tolist())
 
-    if "date_mise_en_service" in df.columns:
-        df["date_mise_en_service"] = pd.to_datetime(df["date_mise_en_service"], errors="coerce")
+    expected_cols = ["region", "commune", "filiere", "puissance_MW", "date_mise_en_service"]
+    missing = [col for col in expected_cols if col not in df.columns]
 
-    return df[["region", "commune", "filiere", "puissance_MW", "date_mise_en_service"]]
+    if missing:
+        print(f"Colonnes manquantes dans facilities : {missing}")
+        for col in missing:
+            df[col] = None
+
+    return df[expected_cols]
 
 
 def clean_ev_charging(df):
